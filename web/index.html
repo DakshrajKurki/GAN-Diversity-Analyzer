@@ -1,0 +1,1127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GAN Diversity Analyzer</title>
+<meta name="description" content="Evaluate the quality and diversity of GAN generated images without training a GAN.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #07070d;
+    --panel: rgba(255, 255, 255, 0.035);
+    --panel-hi: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.08);
+    --border-hi: rgba(255, 255, 255, 0.16);
+    --text: #ecebf5;
+    --muted: #9a98b0;
+    --accent: #8b5cf6;
+    --accent2: #22d3ee;
+    --pink: #f472b6;
+    --good: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --radius: 18px;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: "Space Grotesk", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ---------- animated background ---------- */
+  .bg { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
+  .blob {
+    position: absolute; border-radius: 50%; filter: blur(90px); opacity: 0.35;
+    animation: float 22s ease-in-out infinite;
+  }
+  .blob.b1 { width: 520px; height: 520px; background: var(--accent); top: -160px; left: -120px; }
+  .blob.b2 { width: 460px; height: 460px; background: var(--accent2); bottom: -180px; right: -100px; animation-delay: -7s; }
+  .blob.b3 { width: 360px; height: 360px; background: var(--pink); top: 40%; left: 55%; opacity: 0.18; animation-delay: -14s; }
+  @keyframes float {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    33% { transform: translate(60px, 40px) scale(1.08); }
+    66% { transform: translate(-40px, 70px) scale(0.95); }
+  }
+  .grid-bg {
+    position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+                      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: 44px 44px;
+    mask-image: radial-gradient(ellipse at center, black 30%, transparent 75%);
+  }
+
+  /* ---------- header ---------- */
+  header {
+    max-width: 1400px; margin: 0 auto; padding: 28px 24px 8px;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .logo {
+    width: 46px; height: 46px; border-radius: 14px;
+    background: conic-gradient(from 0deg, var(--accent), var(--accent2), var(--pink), var(--accent));
+    display: grid; place-items: center; animation: spin 10s linear infinite;
+    box-shadow: 0 0 30px rgba(139, 92, 246, 0.5);
+  }
+  .logo::after { content: ""; width: 34px; height: 34px; border-radius: 10px; background: var(--bg); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .brand h1 { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.02em; }
+  .brand p { color: var(--muted); font-size: 0.85rem; }
+  .pill {
+    font-family: var(--mono); font-size: 0.75rem; padding: 7px 14px; border-radius: 999px;
+    border: 1px solid var(--border-hi); background: var(--panel); color: var(--muted);
+  }
+
+  .hero { max-width: 1400px; margin: 0 auto; padding: 34px 24px 26px; }
+  .hero h2 {
+    font-size: clamp(2rem, 5vw, 3.6rem); line-height: 1.05; letter-spacing: -0.035em; font-weight: 700;
+    max-width: 900px;
+  }
+  .grad {
+    background: linear-gradient(90deg, var(--accent), var(--accent2), var(--pink), var(--accent));
+    background-size: 300% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: shimmer 8s linear infinite;
+  }
+  @keyframes shimmer { to { background-position: 300% 0; } }
+  .hero p { color: var(--muted); margin-top: 14px; max-width: 680px; font-size: 1.05rem; line-height: 1.6; }
+
+  /* ---------- layout ---------- */
+  .layout {
+    max-width: 1400px; margin: 0 auto; padding: 0 24px 60px;
+    display: grid; grid-template-columns: 330px 1fr; gap: 22px; align-items: start;
+  }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    padding: 22px; position: relative;
+    animation: rise 0.6s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+  aside.card { position: sticky; top: 18px; }
+  @media (max-width: 980px) { aside.card { position: static; } }
+
+  .section-title { display: flex; align-items: baseline; gap: 12px; margin-bottom: 16px; }
+  .step { font-family: var(--mono); color: var(--accent2); font-size: 0.8rem; }
+  .section-title h3 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; }
+  .section-title .sub { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
+
+  /* ---------- controls ---------- */
+  .tabs {
+    display: grid; grid-template-columns: 1fr 1fr; padding: 4px; gap: 4px;
+    background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 12px; margin-bottom: 18px;
+  }
+  .tab {
+    border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 0.88rem;
+    padding: 9px; border-radius: 9px; cursor: pointer; transition: all 0.25s;
+  }
+  .tab.active { background: linear-gradient(135deg, var(--accent), #6d28d9); color: white; box-shadow: 0 4px 18px rgba(139,92,246,0.45); }
+  .tab:not(.active):hover { color: var(--text); background: var(--panel-hi); }
+
+  .field { margin-bottom: 16px; }
+  .field label { display: flex; justify-content: space-between; font-size: 0.85rem; color: var(--muted); margin-bottom: 8px; }
+  .field label b { font-family: var(--mono); color: var(--text); font-weight: 600; }
+  .hint { font-size: 0.75rem; color: var(--muted); margin-top: 6px; line-height: 1.4; opacity: 0.8; }
+
+  input[type=range] { width: 100%; -webkit-appearance: none; appearance: none; height: 6px; border-radius: 6px; background: rgba(255,255,255,0.08); outline: none; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
+    background: white; border: 4px solid var(--accent); cursor: pointer; box-shadow: 0 0 12px rgba(139,92,246,0.7);
+    transition: transform 0.15s;
+  }
+  input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+  input[type=range]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: white; border: 4px solid var(--accent); cursor: pointer; }
+
+  .row { display: flex; gap: 8px; }
+  input[type=number] {
+    flex: 1; min-width: 0; background: rgba(0,0,0,0.35); border: 1px solid var(--border); color: var(--text);
+    font-family: var(--mono); padding: 10px 12px; border-radius: 10px; font-size: 0.9rem; outline: none;
+  }
+  input[type=number]:focus { border-color: var(--accent); }
+
+  .btn {
+    border: 1px solid var(--border-hi); background: var(--panel-hi); color: var(--text);
+    font: inherit; font-size: 0.88rem; padding: 10px 16px; border-radius: 11px; cursor: pointer;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    transition: transform 0.15s, background 0.2s, border-color 0.2s, box-shadow 0.2s;
+  }
+  .btn:hover { transform: translateY(-1px); border-color: var(--accent); }
+  .btn:active { transform: translateY(1px) scale(0.98); }
+  .btn.primary {
+    width: 100%; border: 0; padding: 13px; font-weight: 600; font-size: 0.95rem;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 8px 26px rgba(139,92,246,0.4); position: relative; overflow: hidden;
+  }
+  .btn.primary::after {
+    content: ""; position: absolute; top: 0; left: -120%; width: 60%; height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+    transform: skewX(-20deg); transition: left 0.6s;
+  }
+  .btn.primary:hover::after { left: 140%; }
+  .btn.icon { padding: 10px 12px; }
+  .btn.ghost { background: transparent; }
+
+  .divider { height: 1px; background: var(--border); margin: 20px 0; }
+
+  .drop {
+    border: 1.5px dashed var(--border-hi); border-radius: 14px; padding: 26px 16px; text-align: center;
+    cursor: pointer; transition: all 0.25s; background: rgba(0,0,0,0.2);
+  }
+  .drop:hover, .drop.over { border-color: var(--accent2); background: rgba(34,211,238,0.06); }
+  .drop .big { font-size: 1.8rem; margin-bottom: 6px; }
+  .drop p { font-size: 0.85rem; color: var(--muted); }
+  .drop strong { color: var(--text); }
+
+  .toggle { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; font-size: 0.88rem; }
+  .switch { position: relative; width: 42px; height: 24px; flex-shrink: 0; }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider-sw { position: absolute; inset: 0; background: rgba(255,255,255,0.12); border-radius: 24px; transition: 0.25s; }
+  .slider-sw::before { content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px; background: white; border-radius: 50%; transition: 0.25s; }
+  .switch input:checked + .slider-sw { background: var(--pink); box-shadow: 0 0 14px rgba(244,114,182,0.6); }
+  .switch input:checked + .slider-sw::before { transform: translateX(18px); }
+
+  /* ---------- main ---------- */
+  main { display: grid; gap: 22px; min-width: 0; }
+
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  @media (max-width: 760px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+  .stat {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 18px;
+    position: relative; overflow: hidden; transition: transform 0.25s, border-color 0.25s;
+  }
+  .stat:hover { transform: translateY(-3px); border-color: var(--border-hi); }
+  .stat::before {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--c, var(--accent)), transparent);
+  }
+  .stat .label { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
+  .stat .value { font-size: 2rem; font-weight: 700; margin-top: 8px; font-family: var(--mono); letter-spacing: -0.03em; }
+  .stat .foot { font-size: 0.78rem; color: var(--muted); margin-top: 4px; }
+
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+  .thumb {
+    position: relative; aspect-ratio: 1; border-radius: 12px; overflow: hidden; cursor: pointer;
+    border: 2px solid transparent; background: #111;
+    animation: pop 0.45s cubic-bezier(.2,.9,.3,1.3) both;
+    transition: transform 0.25s, box-shadow 0.25s;
+  }
+  @keyframes pop { from { opacity: 0; transform: scale(0.6); } to { opacity: 1; transform: none; } }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; image-rendering: auto; transition: transform 0.35s; }
+  .thumb:hover { transform: translateY(-4px) scale(1.04); box-shadow: 0 14px 30px rgba(0,0,0,0.5); z-index: 2; }
+  .thumb:hover img { transform: scale(1.1); }
+  .thumb .idx {
+    position: absolute; left: 6px; bottom: 6px; font-family: var(--mono); font-size: 0.68rem;
+    background: rgba(0,0,0,0.65); padding: 2px 6px; border-radius: 6px;
+  }
+  .thumb .dup {
+    position: absolute; right: 6px; top: 6px; font-family: var(--mono); font-size: 0.65rem; font-weight: 600;
+    padding: 2px 6px; border-radius: 6px; color: #0b0b12;
+  }
+  .thumb.dupe { border-color: var(--gc); box-shadow: 0 0 14px var(--gc); }
+  .gallery.hide-unique .thumb:not(.dupe) { opacity: 0.18; filter: grayscale(1); }
+
+  .viz { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  @media (max-width: 1100px) { .viz { grid-template-columns: 1fr; } }
+  .canvas-wrap { position: relative; width: 100%; }
+  canvas.chart { width: 100%; display: block; border-radius: 12px; background: rgba(0,0,0,0.3); }
+  .legend { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 10px; font-size: 0.75rem; color: var(--muted); font-family: var(--mono); }
+  .legend .bar { flex: 1; height: 8px; border-radius: 6px; background: linear-gradient(90deg, #1e3a8a, #6d28d9, #ec4899, #fde047); }
+
+  .tip {
+    position: fixed; pointer-events: none; z-index: 50; padding: 8px 10px; border-radius: 10px;
+    background: rgba(15,15,25,0.95); border: 1px solid var(--border-hi); font-size: 0.78rem; font-family: var(--mono);
+    opacity: 0; transition: opacity 0.12s; display: flex; align-items: center; gap: 8px;
+  }
+  .tip img { width: 44px; height: 44px; border-radius: 6px; }
+
+  .groups { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .chip {
+    font-family: var(--mono); font-size: 0.75rem; padding: 6px 10px; border-radius: 999px;
+    border: 1px solid var(--gc); color: var(--text); background: rgba(0,0,0,0.3); cursor: pointer; transition: background 0.2s;
+  }
+  .chip:hover { background: var(--panel-hi); }
+  .empty-note { color: var(--muted); font-size: 0.88rem; }
+
+  /* ---------- report ---------- */
+  .report-grid { display: grid; grid-template-columns: 220px 1fr; gap: 26px; align-items: center; }
+  @media (max-width: 760px) { .report-grid { grid-template-columns: 1fr; justify-items: center; } }
+  .gauge { position: relative; width: 200px; height: 200px; }
+  .gauge svg { transform: rotate(-90deg); }
+  .gauge .num { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+  .gauge .num b { font-size: 2.6rem; font-family: var(--mono); display: block; }
+  .gauge .num span { font-size: 0.75rem; color: var(--muted); letter-spacing: 0.08em; text-transform: uppercase; }
+  .ring { transition: stroke-dashoffset 1.2s cubic-bezier(.2,.8,.2,1), stroke 0.6s; }
+  .verdict {
+    display: inline-flex; align-items: center; gap: 10px; font-weight: 700; font-size: 1.25rem; letter-spacing: 0.02em;
+    padding: 10px 18px; border-radius: 12px; margin-bottom: 14px;
+  }
+  .verdict .dot { width: 10px; height: 10px; border-radius: 50%; background: currentColor; box-shadow: 0 0 12px currentColor; animation: pulse 1.6s infinite; }
+  @keyframes pulse { 50% { opacity: 0.35; } }
+  .verdict.good { color: var(--good); background: rgba(52,211,153,0.1); border: 1px solid rgba(52,211,153,0.3); }
+  .verdict.warn { color: var(--warn); background: rgba(251,191,36,0.1); border: 1px solid rgba(251,191,36,0.3); }
+  .verdict.bad { color: var(--bad); background: rgba(248,113,113,0.1); border: 1px solid rgba(248,113,113,0.3); }
+  .report-list { list-style: none; display: grid; gap: 8px; margin: 10px 0 18px; }
+  .report-list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 12px; border-radius: 10px; background: rgba(0,0,0,0.25); font-size: 0.9rem; }
+  .report-list li span:last-child { font-family: var(--mono); }
+  .explain { color: var(--muted); line-height: 1.6; font-size: 0.92rem; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+  /* ---------- modal ---------- */
+  .modal {
+    position: fixed; inset: 0; z-index: 40; background: rgba(4,4,10,0.75); backdrop-filter: blur(8px);
+    display: grid; place-items: center; padding: 20px; opacity: 0; pointer-events: none; transition: opacity 0.25s;
+  }
+  .modal.open { opacity: 1; pointer-events: auto; }
+  .modal-box {
+    width: min(760px, 100%); max-height: 90vh; overflow: auto; background: #0e0e18; border: 1px solid var(--border-hi);
+    border-radius: 20px; padding: 24px; transform: scale(0.94) translateY(10px); transition: transform 0.3s cubic-bezier(.2,.9,.3,1.2);
+  }
+  .modal.open .modal-box { transform: none; }
+  .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 18px; }
+  .modal-head h4 { font-size: 1.1rem; }
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .compare figure { text-align: center; }
+  .compare img { width: 100%; border-radius: 14px; image-rendering: auto; border: 1px solid var(--border); }
+  .compare figcaption { font-family: var(--mono); font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
+  .score-big { text-align: center; margin: 18px 0 6px; font-family: var(--mono); font-size: 1.1rem; }
+  .similar-list { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-top: 12px; }
+  .similar-list button { border: 1px solid var(--border); background: none; border-radius: 10px; padding: 0; cursor: pointer; overflow: hidden; color: var(--muted); font-family: var(--mono); font-size: 0.7rem; transition: border-color 0.2s, transform 0.2s; }
+  .similar-list button:hover { border-color: var(--accent2); transform: translateY(-2px); }
+  .similar-list img { width: 100%; display: block; aspect-ratio: 1; object-fit: cover; }
+  .similar-list span { display: block; padding: 4px; }
+
+  /* ---------- toast + loader ---------- */
+  .toasts { position: fixed; bottom: 22px; right: 22px; display: grid; gap: 10px; z-index: 60; }
+  .toast {
+    padding: 12px 16px; border-radius: 12px; background: rgba(20,20,32,0.95); border: 1px solid var(--border-hi);
+    font-size: 0.88rem; box-shadow: 0 10px 30px rgba(0,0,0,0.4); animation: slidein 0.35s cubic-bezier(.2,.9,.3,1.2);
+    border-left: 3px solid var(--accent2);
+  }
+  @keyframes slidein { from { opacity: 0; transform: translateX(40px); } }
+  .loading { position: fixed; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(4,4,10,0.6); backdrop-filter: blur(4px); opacity: 0; pointer-events: none; transition: opacity 0.2s; }
+  .loading.show { opacity: 1; pointer-events: auto; }
+  .spinner { width: 54px; height: 54px; border-radius: 50%; border: 4px solid rgba(255,255,255,0.1); border-top-color: var(--accent2); animation: spin 0.8s linear infinite; }
+
+  footer { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 0 24px 40px; }
+  .count-badge { font-family: var(--mono); font-size: 0.75rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="bg"><div class="grid-bg"></div><div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div></div>
+
+<header>
+  <div class="brand">
+    <div class="logo"></div>
+    <div>
+      <h1>GAN Diversity Analyzer</h1>
+      <p>Image quality &amp; mode-collapse checker</p>
+    </div>
+  </div>
+  <span class="pill">Q7 · Generative AI Lab</span>
+</header>
+
+<section class="hero">
+  <h2>Is your GAN <span class="grad">creative</span> or just repeating itself?</h2>
+  <p>Load a set of generated images and this tool measures how many are truly unique, how similar they are to each other, and tells you whether the set looks diverse or shows signs of mode collapse. No GAN training needed, everything runs in your browser.</p>
+</section>
+
+<div class="layout">
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="card">
+    <div class="section-title"><span class="step">00</span><h3>Load images</h3></div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="demo">GAN Sampler</button>
+      <button class="tab" data-tab="upload">Upload Set</button>
+    </div>
+
+    <div id="panel-demo">
+      <div class="field">
+        <label>Number of samples <b id="nVal">32</b></label>
+        <input type="range" id="nSamples" min="8" max="96" step="4" value="32">
+      </div>
+      <div class="field">
+        <label>Mode collapse level <b id="cVal">0%</b></label>
+        <input type="range" id="collapse" min="0" max="95" step="5" value="0">
+        <div class="hint">0% = every sample is different. Higher = the generator keeps producing the same few images.</div>
+      </div>
+      <div class="field">
+        <label>Variation between copies <b id="vVal">2</b></label>
+        <input type="range" id="variation" min="0" max="10" step="1" value="2">
+        <div class="hint">Small changes on repeated samples, like a real collapsed GAN.</div>
+      </div>
+      <div class="field">
+        <label>Latent seed</label>
+        <div class="row">
+          <input type="number" id="seed" value="42">
+          <button class="btn icon" id="diceBtn" title="Random seed">🎲</button>
+        </div>
+      </div>
+      <button class="btn primary" id="generateBtn">⚡ Generate samples</button>
+    </div>
+
+    <div id="panel-upload" hidden>
+      <div class="drop" id="drop">
+        <div class="big">🖼️</div>
+        <p><strong>Drop images or a .zip here</strong><br>or click to browse (PNG / JPG)</p>
+        <input type="file" id="fileInput" accept=".png,.jpg,.jpeg,.webp,.zip" multiple hidden>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn" id="clearBtn" style="flex:1">🗑 Clear</button>
+      </div>
+    </div>
+
+    <div class="divider"></div>
+    <div class="section-title"><span class="step">⚙</span><h3>Analysis settings</h3></div>
+
+    <div class="field">
+      <label>Duplicate threshold <b id="hVal">3 bits</b></label>
+      <input type="range" id="hashTh" min="0" max="20" step="1" value="3">
+      <div class="hint">Two images count as duplicates if their perceptual hashes differ by at most this many bits (out of 64).</div>
+    </div>
+    <div class="field">
+      <label>High similarity threshold <b id="sVal">0.90</b></label>
+      <input type="range" id="simTh" min="0.5" max="1" step="0.01" value="0.9">
+    </div>
+    <label class="toggle">
+      <span>Highlight duplicates only</span>
+      <span class="switch"><input type="checkbox" id="dupOnly"><span class="slider-sw"></span></span>
+    </label>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main>
+    <div class="stats">
+      <div class="stat" style="--c: var(--accent2)"><div class="label">Total images</div><div class="value" id="stTotal">0</div><div class="foot">in this sample set</div></div>
+      <div class="stat" style="--c: var(--good)"><div class="label">Unique images</div><div class="value" id="stUnique">0</div><div class="foot" id="stUniqueFoot">—</div></div>
+      <div class="stat" style="--c: var(--accent)"><div class="label">Avg similarity</div><div class="value" id="stAvg">0</div><div class="foot">cosine, lower = more diverse</div></div>
+      <div class="stat" style="--c: var(--pink)"><div class="label">Very similar pairs</div><div class="value" id="stPairs">0</div><div class="foot" id="stPairsFoot">above threshold</div></div>
+    </div>
+
+    <section class="card">
+      <div class="section-title"><span class="step">01</span><h3>Generated image gallery</h3><span class="sub count-badge" id="galleryCount"></span></div>
+      <div class="gallery" id="gallery"></div>
+    </section>
+
+    <section class="card">
+      <div class="section-title"><span class="step">02</span><h3>Uniqueness &amp; duplicate groups</h3><span class="sub">click a group to inspect</span></div>
+      <div id="groupInfo" class="empty-note"></div>
+      <div class="groups" id="groups"></div>
+    </section>
+
+    <div class="viz">
+      <section class="card">
+        <div class="section-title"><span class="step">03</span><h3>Similarity heatmap</h3><span class="sub">hover · click a cell</span></div>
+        <div class="canvas-wrap"><canvas class="chart" id="heatmap"></canvas></div>
+        <div class="legend"><span>-1 different</span><div class="bar"></div><span>1 same</span></div>
+      </section>
+      <section class="card">
+        <div class="section-title"><span class="step">03</span><h3>Diversity map (PCA)</h3><span class="sub">spread = diversity</span></div>
+        <div class="canvas-wrap"><canvas class="chart" id="scatter"></canvas></div>
+        <div class="legend"><span>● unique</span><span style="color:var(--pink)">● duplicate group</span><span>hover a point</span></div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="section-title"><span class="step">03</span><h3>Pairwise similarity distribution</h3><span class="sub">a spike on the right = repetition</span></div>
+      <canvas class="chart" id="hist"></canvas>
+    </section>
+
+    <section class="card">
+      <div class="section-title"><span class="step">04</span><h3>Diversity report</h3></div>
+      <div class="report-grid">
+        <div class="gauge">
+          <svg width="200" height="200" viewBox="0 0 200 200">
+            <defs>
+              <linearGradient id="gaugeGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stop-color="#8b5cf6"/><stop offset="100%" stop-color="#22d3ee"/>
+              </linearGradient>
+            </defs>
+            <circle cx="100" cy="100" r="84" stroke="rgba(255,255,255,0.07)" stroke-width="14" fill="none"/>
+            <circle class="ring" id="ring" cx="100" cy="100" r="84" stroke="url(#gaugeGrad)" stroke-width="14" fill="none"
+                    stroke-linecap="round" stroke-dasharray="527.8" stroke-dashoffset="527.8"/>
+          </svg>
+          <div class="num"><div><b id="gaugeNum">0</b><span>Diversity index</span></div></div>
+        </div>
+        <div>
+          <div class="verdict good" id="verdict"><span class="dot"></span><span id="verdictText">—</span></div>
+          <p class="explain" id="explain"></p>
+          <ul class="report-list" id="reportList"></ul>
+          <div class="actions">
+            <button class="btn" id="dlMd">⬇ Download report</button>
+            <button class="btn" id="dlJson">⬇ Export JSON</button>
+            <button class="btn" id="copyBtn">📋 Copy report</button>
+            <button class="btn ghost" id="topBtn">↑ Back to top</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer>Built with HTML Canvas &amp; JavaScript · Perceptual hashing + cosine similarity + PCA</footer>
+
+<!-- modal -->
+<div class="modal" id="modal">
+  <div class="modal-box">
+    <div class="modal-head"><h4 id="modalTitle">Compare</h4><button class="btn icon" id="closeModal">✕</button></div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<div class="tip" id="tip"></div>
+<div class="toasts" id="toasts"></div>
+<div class="loading" id="loading"><div class="spinner"></div></div>
+
+<script>
+// ===================================================================
+//  GAN Image Quality and Diversity Analyzer  (runs fully in browser)
+// ===================================================================
+
+const $ = (id) => document.getElementById(id);
+const MAX_IMAGES = 200;
+const GROUP_COLORS = ["#f472b6", "#fbbf24", "#34d399", "#60a5fa", "#fb923c", "#a78bfa", "#f87171", "#2dd4bf"];
+
+let images = [];     // { url, feat, hash }
+let result = null;   // latest analysis
+
+// ---------------- small helpers ----------------
+function toast(msg) {
+  const t = document.createElement("div");
+  t.className = "toast";
+  t.textContent = msg;
+  $("toasts").appendChild(t);
+  setTimeout(() => { t.style.opacity = "0"; t.style.transition = "opacity .4s"; }, 2400);
+  setTimeout(() => t.remove(), 2900);
+}
+
+function showLoading(on) { $("loading").classList.toggle("show", on); }
+
+// seeded random number generator so the same seed gives the same samples
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function animateNumber(el, to, decimals = 0, suffix = "") {
+  const from = parseFloat(el.dataset.v || 0);
+  const start = performance.now();
+  const dur = 900;
+  function frame(now) {
+    const p = Math.min(1, (now - start) / dur);
+    const e = 1 - Math.pow(1 - p, 3);
+    el.textContent = (from + (to - from) * e).toFixed(decimals) + suffix;
+    if (p < 1) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  el.dataset.v = to;
+}
+
+function setupCanvas(canvas, heightRatio) {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth;
+  const h = Math.round(w * heightRatio);
+  canvas.style.height = h + "px";
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w, h };
+}
+
+// ---------------- GAN sampler (demo generator) ----------------
+// Each "mode" is a set of drawing parameters. A healthy GAN makes many modes,
+// a collapsed GAN keeps reusing a few of them with tiny changes.
+
+function randomMode(rng) {
+  const shapes = [];
+  const count = 2 + Math.floor(rng() * 4);
+  for (let i = 0; i < count; i++) {
+    shapes.push({
+      type: ["circle", "rect", "ring", "tri", "blob"][Math.floor(rng() * 5)],
+      x: rng(), y: rng(), size: 0.15 + rng() * 0.35,
+      hue: rng() * 360, sat: 55 + rng() * 40, light: 45 + rng() * 25,
+      rot: rng() * Math.PI * 2,
+    });
+  }
+  return { h1: rng() * 360, h2: rng() * 360, angle: rng() * Math.PI, shapes };
+}
+
+function jitterMode(mode, rng, amount) {
+  const a = amount / 10;
+  const j = (v, s) => v + (rng() - 0.5) * s * a;
+  return {
+    h1: j(mode.h1, 30), h2: j(mode.h2, 30), angle: j(mode.angle, 0.4),
+    shapes: mode.shapes.map((s) => ({
+      ...s, x: j(s.x, 0.1), y: j(s.y, 0.1), size: Math.max(0.05, j(s.size, 0.08)),
+      hue: j(s.hue, 25), rot: j(s.rot, 0.6),
+    })),
+  };
+}
+
+function paintMode(mode, size) {
+  const c = document.createElement("canvas");
+  c.width = c.height = size;
+  const ctx = c.getContext("2d");
+  const gx = Math.cos(mode.angle) * size, gy = Math.sin(mode.angle) * size;
+  const g = ctx.createLinearGradient(0, 0, Math.abs(gx) + 1, Math.abs(gy) + 1);
+  g.addColorStop(0, `hsl(${mode.h1},55%,22%)`);
+  g.addColorStop(1, `hsl(${mode.h2},60%,40%)`);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+
+  for (const s of mode.shapes) {
+    ctx.save();
+    ctx.translate(s.x * size, s.y * size);
+    ctx.rotate(s.rot);
+    const r = s.size * size;
+    const col = `hsl(${s.hue},${s.sat}%,${s.light}%)`;
+    ctx.fillStyle = col; ctx.strokeStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = size * 0.08;
+    ctx.beginPath();
+    if (s.type === "circle") { ctx.arc(0, 0, r / 2, 0, Math.PI * 2); ctx.fill(); }
+    else if (s.type === "rect") { ctx.fillRect(-r / 2, -r / 3, r, r * 0.66); }
+    else if (s.type === "ring") { ctx.lineWidth = r * 0.18; ctx.arc(0, 0, r / 2, 0, Math.PI * 2); ctx.stroke(); }
+    else if (s.type === "tri") { ctx.moveTo(0, -r / 2); ctx.lineTo(r / 2, r / 2); ctx.lineTo(-r / 2, r / 2); ctx.closePath(); ctx.fill(); }
+    else { for (let k = 0; k <= 8; k++) { const t = (k / 8) * Math.PI * 2; const rr = (r / 2) * (0.7 + 0.3 * Math.sin(t * 3)); ctx.lineTo(Math.cos(t) * rr, Math.sin(t) * rr); } ctx.fill(); }
+    ctx.restore();
+  }
+  return c;
+}
+
+function generateSamples() {
+  const n = +$("nSamples").value;
+  const collapse = +$("collapse").value / 100;
+  const variation = +$("variation").value;
+  const seed = +$("seed").value || 0;
+  const rng = mulberry32(seed);
+
+  // number of distinct modes the "generator" can produce
+  const nModes = Math.max(1, Math.round(n * (1 - collapse)));
+  const modes = Array.from({ length: nModes }, () => randomMode(rng));
+
+  const canvases = [];
+  for (let i = 0; i < n; i++) {
+    // first nModes samples cover every mode once, the rest repeat modes
+    const m = i < nModes ? modes[i] : modes[Math.floor(rng() * nModes)];
+    const isCopy = i >= nModes;
+    canvases.push(paintMode(isCopy ? jitterMode(m, rng, variation) : m, 128));
+  }
+  // shuffle so copies are not all at the end
+  for (let i = canvases.length - 1; i > 0; i--) {
+    const k = Math.floor(rng() * (i + 1));
+    [canvases[i], canvases[k]] = [canvases[k], canvases[i]];
+  }
+  return canvases;
+}
+
+// ---------------- feature extraction ----------------
+const c8 = document.createElement("canvas"); c8.width = c8.height = 8;
+const c32 = document.createElement("canvas"); c32.width = c32.height = 32;
+const ctx8 = c8.getContext("2d", { willReadFrequently: true });
+const ctx32 = c32.getContext("2d", { willReadFrequently: true });
+
+function drawCover(ctx, src, size) {
+  const w = src.width, h = src.height, s = Math.min(w, h);
+  ctx.clearRect(0, 0, size, size);
+  ctx.drawImage(src, (w - s) / 2, (h - s) / 2, s, s, 0, 0, size, size);
+}
+
+// average hash: shrink to 8x8 grey, 1 if pixel brighter than the mean
+function averageHash(src) {
+  drawCover(ctx8, src, 8);
+  const d = ctx8.getImageData(0, 0, 8, 8).data;
+  const grey = new Float32Array(64);
+  let mean = 0;
+  for (let i = 0; i < 64; i++) {
+    grey[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+    mean += grey[i];
+  }
+  mean /= 64;
+  return grey.map((g) => (g > mean ? 1 : 0));
+}
+
+// feature vector: 32x32 RGB pixels, centred and normalised (for cosine similarity)
+function featureVector(src) {
+  drawCover(ctx32, src, 32);
+  const d = ctx32.getImageData(0, 0, 32, 32).data;
+  const f = new Float32Array(32 * 32 * 3);
+  let k = 0, mean = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    f[k++] = d[i] / 255; f[k++] = d[i + 1] / 255; f[k++] = d[i + 2] / 255;
+  }
+  for (const v of f) mean += v;
+  mean /= f.length;
+  let norm = 0;
+  for (let i = 0; i < f.length; i++) { f[i] -= mean; norm += f[i] * f[i]; }
+  norm = Math.sqrt(norm);
+  if (norm > 0) for (let i = 0; i < f.length; i++) f[i] /= norm;
+  return f;
+}
+
+function toEntry(src) {
+  const c = document.createElement("canvas");
+  const size = Math.min(256, Math.max(src.width, src.height));
+  c.width = c.height = size;
+  drawCover(c.getContext("2d"), src, size);
+  return { url: c.toDataURL("image/png"), feat: featureVector(src), hash: averageHash(src) };
+}
+
+// ---------------- analysis ----------------
+function dot(a, b) { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; }
+
+function countUnique(hashes, maxHamming) {
+  const groups = [];
+  hashes.forEach((h, i) => {
+    for (const g of groups) {
+      const ref = hashes[g[0]];
+      let diff = 0;
+      for (let b = 0; b < 64; b++) if (h[b] !== ref[b]) diff++;
+      if (diff <= maxHamming) { g.push(i); return; }
+    }
+    groups.push([i]);
+  });
+  return groups;
+}
+
+// PCA to 2D using the Gram matrix + power iteration
+function pca2d(feats) {
+  const n = feats.length, d = feats[0].length;
+  const mean = new Float32Array(d);
+  feats.forEach((f) => { for (let i = 0; i < d; i++) mean[i] += f[i] / n; });
+  const X = feats.map((f) => f.map((v, i) => v - mean[i]));
+  const K = X.map((a) => X.map((b) => dot(a, b)));
+
+  const comps = [];
+  const rng = mulberry32(7);
+  for (let c = 0; c < 2; c++) {
+    let v = Array.from({ length: n }, () => rng() - 0.5);
+    let lambda = 0;
+    for (let it = 0; it < 120; it++) {
+      const w = K.map((row) => row.reduce((s, x, j) => s + x * v[j], 0));
+      const norm = Math.hypot(...w) || 1;
+      lambda = norm;
+      v = w.map((x) => x / norm);
+    }
+    comps.push(v.map((x) => x * Math.sqrt(Math.max(lambda, 0))));
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) K[i][j] -= lambda * v[i] * v[j];
+  }
+  return comps[0].map((x, i) => [x, comps[1][i]]);
+}
+
+function analyze() {
+  if (images.length < 2) { renderEmpty(); return; }
+  const n = images.length;
+  const simTh = +$("simTh").value;
+
+  const sim = Array.from({ length: n }, () => new Float32Array(n));
+  const upper = [];
+  for (let i = 0; i < n; i++) {
+    sim[i][i] = 1;
+    for (let j = i + 1; j < n; j++) {
+      const s = dot(images[i].feat, images[j].feat);
+      sim[i][j] = sim[j][i] = s;
+      upper.push(s);
+    }
+  }
+  const groups = countUnique(images.map((x) => x.hash), +$("hashTh").value);
+  const avg = upper.reduce((a, b) => a + b, 0) / upper.length;
+  const highPairs = upper.filter((s) => s >= simTh).length;
+  const uniqueRatio = groups.length / n;
+  const score = (1 - avg) * uniqueRatio;
+
+  let verdict, level;
+  if (uniqueRatio >= 0.9 && avg < 0.6) { verdict = "DIVERSE"; level = "good"; }
+  else if (uniqueRatio < 0.7 || avg >= 0.8) { verdict = "REPETITIVE"; level = "bad"; }
+  else { verdict = "MODERATELY DIVERSE"; level = "warn"; }
+
+  // which group each image belongs to (only groups with more than one image get a colour)
+  const groupOf = new Array(n).fill(-1);
+  const dupGroups = groups.filter((g) => g.length > 1);
+  dupGroups.forEach((g, gi) => g.forEach((i) => (groupOf[i] = gi)));
+
+  result = { n, sim, upper, groups, dupGroups, groupOf, avg, highPairs, uniqueRatio, score, verdict, level, simTh,
+             pts: pca2d(images.map((x) => x.feat)) };
+  renderAll();
+}
+
+// ---------------- rendering ----------------
+function renderEmpty() {
+  $("gallery").innerHTML = '<p class="empty-note">Load at least 2 images to start the analysis.</p>';
+  result = null;
+}
+
+function renderAll() {
+  const r = result;
+  animateNumber($("stTotal"), r.n);
+  animateNumber($("stUnique"), r.groups.length);
+  animateNumber($("stAvg"), r.avg, 3);
+  animateNumber($("stPairs"), r.highPairs);
+  $("stUniqueFoot").textContent = (r.uniqueRatio * 100).toFixed(1) + "% of the set";
+  $("stPairsFoot").textContent = "cosine ≥ " + r.simTh.toFixed(2);
+  renderGallery();
+  renderGroups();
+  renderHeatmap();
+  renderScatter();
+  renderHist();
+  renderReport();
+}
+
+function groupColor(gi) { return GROUP_COLORS[gi % GROUP_COLORS.length]; }
+
+function renderGallery() {
+  const g = $("gallery");
+  g.innerHTML = "";
+  images.forEach((img, i) => {
+    const gi = result.groupOf[i];
+    const div = document.createElement("div");
+    div.className = "thumb" + (gi >= 0 ? " dupe" : "");
+    div.style.animationDelay = Math.min(i * 12, 600) + "ms";
+    if (gi >= 0) div.style.setProperty("--gc", groupColor(gi));
+    div.innerHTML = `<img src="${img.url}" alt="sample ${i}"><span class="idx">#${i}</span>` +
+      (gi >= 0 ? `<span class="dup" style="background:${groupColor(gi)}">D${gi + 1}</span>` : "");
+    div.onclick = () => openImage(i);
+    g.appendChild(div);
+  });
+  $("galleryCount").textContent = `${images.length} images`;
+}
+
+function renderGroups() {
+  const r = result;
+  const box = $("groups");
+  box.innerHTML = "";
+  if (!r.dupGroups.length) {
+    $("groupInfo").textContent = "No near-duplicate images found. Every sample looks different.";
+    return;
+  }
+  const dupImages = r.dupGroups.reduce((s, g) => s + g.length, 0);
+  $("groupInfo").textContent = `${r.dupGroups.length} duplicate group(s) found, covering ${dupImages} of ${r.n} images.`;
+  r.dupGroups.forEach((g, gi) => {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.style.setProperty("--gc", groupColor(gi));
+    chip.textContent = `D${gi + 1} · ${g.map((i) => "#" + i).join(", ")}`;
+    chip.onclick = () => openCompare(g[0], g[1]);
+    box.appendChild(chip);
+  });
+}
+
+// colour scale: deep blue -> purple -> pink -> yellow
+function heatColor(v) {
+  const t = Math.max(0, Math.min(1, (v + 1) / 2));
+  const stops = [[30, 58, 138], [109, 40, 217], [236, 72, 153], [253, 224, 71]];
+  const p = t * (stops.length - 1), k = Math.min(stops.length - 2, Math.floor(p)), f = p - k;
+  const c = stops[k].map((a, i) => Math.round(a + (stops[k + 1][i] - a) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+
+function renderHeatmap() {
+  const cv = $("heatmap");
+  const { ctx, w } = setupCanvas(cv, 1);
+  const n = result.n, cell = w / n;
+  for (let i = 0; i < n; i++)
+    for (let j = 0; j < n; j++) {
+      ctx.fillStyle = heatColor(result.sim[i][j]);
+      ctx.fillRect(j * cell, i * cell, Math.ceil(cell), Math.ceil(cell));
+    }
+  cv._cell = cell;
+}
+
+function renderScatter() {
+  const cv = $("scatter");
+  const { ctx, w, h } = setupCanvas(cv, 1);
+  const pts = result.pts, pad = 28;
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  const sx = (x) => pad + ((x - minX) / (maxX - minX || 1)) * (w - pad * 2);
+  const sy = (y) => h - pad - ((y - minY) / (maxY - minY || 1)) * (h - pad * 2);
+
+  ctx.strokeStyle = "rgba(255,255,255,0.06)";
+  ctx.lineWidth = 1;
+  for (let k = 0; k <= 4; k++) {
+    const gx = pad + (k / 4) * (w - pad * 2), gy = pad + (k / 4) * (h - pad * 2);
+    ctx.beginPath(); ctx.moveTo(gx, pad); ctx.lineTo(gx, h - pad); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(pad, gy); ctx.lineTo(w - pad, gy); ctx.stroke();
+  }
+  cv._pts = pts.map((p, i) => {
+    const x = sx(p[0]), y = sy(p[1]);
+    const gi = result.groupOf[i];
+    const col = gi >= 0 ? groupColor(gi) : "#22d3ee";
+    ctx.beginPath();
+    ctx.fillStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = 12;
+    ctx.arc(x, y, gi >= 0 ? 6 : 5, 0, Math.PI * 2);
+    ctx.fill();
+    return { x, y, i };
+  });
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = "rgba(255,255,255,0.4)";
+  ctx.font = "11px JetBrains Mono";
+  ctx.fillText("PC1 →", w - pad - 40, h - 8);
+  ctx.save(); ctx.translate(12, pad + 40); ctx.rotate(-Math.PI / 2); ctx.fillText("PC2 →", 0, 0); ctx.restore();
+}
+
+function renderHist() {
+  const cv = $("hist");
+  const { ctx, w, h } = setupCanvas(cv, 0.28);
+  const bins = 20, counts = new Array(bins).fill(0);
+  result.upper.forEach((s) => { counts[Math.min(bins - 1, Math.max(0, Math.floor(((s + 1) / 2) * bins)))]++; });
+  const max = Math.max(...counts, 1), padB = 22, padL = 8;
+  const bw = (w - padL * 2) / bins;
+  counts.forEach((c, k) => {
+    const bh = (c / max) * (h - padB - 12);
+    const x = padL + k * bw, y = h - padB - bh;
+    const g = ctx.createLinearGradient(0, y, 0, h - padB);
+    g.addColorStop(0, heatColor(-1 + (k + 0.5) * (2 / bins)));
+    g.addColorStop(1, "rgba(139,92,246,0.15)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x + 2, y, bw - 4, bh, [5, 5, 0, 0]); else ctx.rect(x + 2, y, bw - 4, bh);
+    ctx.fill();
+  });
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.font = "11px JetBrains Mono";
+  ["-1.0", "-0.5", "0.0", "0.5", "1.0"].forEach((t, k) => {
+    ctx.fillText(t, padL + (k / 4) * (w - padL * 2) - (k === 4 ? 26 : k === 0 ? 0 : 12), h - 6);
+  });
+  // threshold line
+  const tx = padL + ((result.simTh + 1) / 2) * (w - padL * 2);
+  ctx.strokeStyle = "#f472b6"; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(tx, 6); ctx.lineTo(tx, h - padB); ctx.stroke(); ctx.setLineDash([]);
+}
+
+function reportItems() {
+  const r = result;
+  return [
+    ["Total images analysed", r.n],
+    ["Unique images (perceptual hash)", `${r.groups.length} (${(r.uniqueRatio * 100).toFixed(1)}%)`],
+    ["Duplicate groups", r.dupGroups.length],
+    ["Average pairwise cosine similarity", r.avg.toFixed(3)],
+    [`Pairs with similarity ≥ ${r.simTh.toFixed(2)}`, r.highPairs],
+    ["Diversity score (1 − avg sim) × unique ratio", r.score.toFixed(3)],
+  ];
+}
+
+function explanation() {
+  const r = result;
+  if (r.level === "good") return "Almost every sample is unique and the images are not very similar to each other on average. The generator is covering many different modes, so there is no sign of mode collapse.";
+  if (r.level === "bad") return "A large share of the samples are near-copies of each other. This is the typical pattern of mode collapse, where the generator keeps producing the same few outputs instead of exploring the data distribution.";
+  return "Most samples are different, but some groups of images look alike. The generator has decent variety, though it is starting to repeat a few modes.";
+}
+
+function renderReport() {
+  const r = result;
+  const pct = Math.round(Math.max(0, Math.min(1, r.score)) * 100);
+  const ring = $("ring");
+  ring.style.strokeDashoffset = 527.8 * (1 - pct / 100);
+  animateNumber($("gaugeNum"), pct);
+  const v = $("verdict");
+  v.className = "verdict " + r.level;
+  $("verdictText").textContent = r.verdict;
+  $("explain").textContent = explanation();
+  $("reportList").innerHTML = reportItems().map(([k, val]) => `<li><span>${k}</span><span>${val}</span></li>`).join("");
+}
+
+function reportMarkdown() {
+  const r = result;
+  let md = `# GAN Image Diversity Report\n\nGenerated: ${new Date().toLocaleString()}\n\n## Verdict: ${r.verdict}\n\n${explanation()}\n\n## Metrics\n\n`;
+  reportItems().forEach(([k, val]) => (md += `- ${k}: **${val}**\n`));
+  md += `- Diversity index: **${Math.round(Math.max(0, Math.min(1, r.score)) * 100)} / 100**\n`;
+  if (r.dupGroups.length) {
+    md += `\n## Duplicate groups\n\n`;
+    r.dupGroups.forEach((g, gi) => (md += `- D${gi + 1}: ${g.map((i) => "#" + i).join(", ")}\n`));
+  }
+  md += `\n## Method\n\n- Uniqueness: 64-bit average hash, images within ${$("hashTh").value} bits are treated as duplicates.\n- Similarity: cosine similarity on 32x32 RGB pixel vectors.\n- Diversity map: PCA projection of the same vectors to 2D.\n`;
+  return md;
+}
+
+function download(name, text, type) {
+  const blob = new Blob([text], { type });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------------- modal ----------------
+function openModal(title, html) {
+  $("modalTitle").textContent = title;
+  $("modalBody").innerHTML = html;
+  $("modal").classList.add("open");
+}
+function closeModal() { $("modal").classList.remove("open"); }
+
+function openCompare(i, j) {
+  const s = result.sim[i][j];
+  const gi = result.groupOf[i];
+  const same = gi >= 0 && gi === result.groupOf[j];
+  openModal(`Compare #${i} vs #${j}`, `
+    <div class="compare">
+      <figure><img src="${images[i].url}"><figcaption>#${i}</figcaption></figure>
+      <figure><img src="${images[j].url}"><figcaption>#${j}</figcaption></figure>
+    </div>
+    <div class="score-big">cosine similarity: <b style="color:${heatColor(s)}">${s.toFixed(3)}</b></div>
+    <p class="explain" style="text-align:center">${i === j ? "Same image." : same ? "These two are in the same duplicate group." : s >= result.simTh ? "Very similar, but not flagged as an exact duplicate." : "These images are different."}</p>`);
+}
+
+function openImage(i) {
+  const order = images.map((_, j) => j).filter((j) => j !== i).sort((a, b) => result.sim[i][b] - result.sim[i][a]).slice(0, 5);
+  openModal(`Sample #${i}`, `
+    <img src="${images[i].url}" style="width:min(320px,100%);display:block;margin:0 auto;border-radius:14px;border:1px solid var(--border)">
+    <h4 style="margin:20px 0 4px">Most similar samples</h4>
+    <p class="explain">Click one to compare side by side.</p>
+    <div class="similar-list">${order.map((j) => `<button data-j="${j}"><img src="${images[j].url}"><span>#${j} · ${result.sim[i][j].toFixed(2)}</span></button>`).join("")}</div>`);
+  $("modalBody").querySelectorAll("[data-j]").forEach((b) => (b.onclick = () => openCompare(i, +b.dataset.j)));
+}
+
+// ---------------- loading images ----------------
+async function loadFiles(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
+  showLoading(true);
+  const sources = [];
+  try {
+    for (const f of files) {
+      if (f.name.toLowerCase().endsWith(".zip")) {
+        if (typeof JSZip === "undefined") { toast("Zip support failed to load, upload images directly"); continue; }
+        const zip = await JSZip.loadAsync(f);
+        for (const name of Object.keys(zip.files)) {
+          if (/\.(png|jpe?g|webp)$/i.test(name) && !name.startsWith("__MACOSX")) {
+            sources.push(await zip.files[name].async("blob"));
+          }
+        }
+      } else if (f.type.startsWith("image/")) {
+        sources.push(f);
+      }
+    }
+    const list = sources.slice(0, MAX_IMAGES);
+    if (sources.length > MAX_IMAGES) toast(`Only the first ${MAX_IMAGES} images are used`);
+    const loaded = [];
+    for (const b of list) {
+      try { loaded.push(toEntry(await createImageBitmap(b))); } catch (e) { /* skip broken image */ }
+    }
+    if (loaded.length < 2) { toast("Need at least 2 valid images"); return; }
+    images = loaded;
+    analyze();
+    toast(`Loaded ${loaded.length} images`);
+  } finally {
+    showLoading(false);
+  }
+}
+
+function runGenerator(silent) {
+  showLoading(true);
+  setTimeout(() => {
+    images = generateSamples().map(toEntry);
+    analyze();
+    showLoading(false);
+    if (!silent) toast(`Generated ${images.length} samples`);
+  }, 30);
+}
+
+// ---------------- events ----------------
+document.querySelectorAll(".tab").forEach((t) =>
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach((x) => x.classList.toggle("active", x === t));
+    $("panel-demo").hidden = t.dataset.tab !== "demo";
+    $("panel-upload").hidden = t.dataset.tab !== "upload";
+  })
+);
+
+$("nSamples").oninput = (e) => ($("nVal").textContent = e.target.value);
+$("collapse").oninput = (e) => ($("cVal").textContent = e.target.value + "%");
+$("variation").oninput = (e) => ($("vVal").textContent = e.target.value);
+$("hashTh").oninput = (e) => { $("hVal").textContent = e.target.value + " bits"; analyze(); };
+$("simTh").oninput = (e) => { $("sVal").textContent = (+e.target.value).toFixed(2); analyze(); };
+["nSamples", "collapse", "variation"].forEach((id) => ($(id).onchange = () => runGenerator(true)));
+
+$("generateBtn").onclick = () => runGenerator(false);
+$("diceBtn").onclick = () => { $("seed").value = Math.floor(Math.random() * 99999); runGenerator(false); };
+$("seed").onchange = () => runGenerator(true);
+$("dupOnly").onchange = (e) => $("gallery").classList.toggle("hide-unique", e.target.checked);
+
+const drop = $("drop");
+drop.onclick = () => $("fileInput").click();
+$("fileInput").onchange = (e) => { loadFiles(e.target.files); e.target.value = ""; };
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => loadFiles(e.dataTransfer.files));
+$("clearBtn").onclick = () => { images = []; renderEmpty(); toast("Cleared all images"); };
+
+$("dlMd").onclick = () => { if (!result) return toast("Nothing to export yet"); download("gan_diversity_report.md", reportMarkdown(), "text/markdown"); toast("Report downloaded"); };
+$("dlJson").onclick = () => {
+  if (!result) return toast("Nothing to export yet");
+  const r = result;
+  const data = { verdict: r.verdict, total: r.n, unique: r.groups.length, unique_ratio: +r.uniqueRatio.toFixed(4),
+    avg_similarity: +r.avg.toFixed(4), high_similarity_pairs: r.highPairs, diversity_score: +r.score.toFixed(4),
+    duplicate_groups: r.dupGroups, settings: { hash_threshold: +$("hashTh").value, similarity_threshold: r.simTh } };
+  download("gan_diversity_report.json", JSON.stringify(data, null, 2), "application/json");
+  toast("JSON exported");
+};
+$("copyBtn").onclick = async () => {
+  if (!result) return toast("Nothing to copy yet");
+  try { await navigator.clipboard.writeText(reportMarkdown()); toast("Report copied to clipboard"); }
+  catch { toast("Copy blocked by the browser, use Download instead"); }
+};
+$("topBtn").onclick = () => window.scrollTo({ top: 0, behavior: "smooth" });
+$("closeModal").onclick = closeModal;
+$("modal").onclick = (e) => { if (e.target.id === "modal") closeModal(); };
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeModal(); });
+
+// tooltips on heatmap and scatter
+const tip = $("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.style.opacity = 1; tip.style.left = e.clientX + 14 + "px"; tip.style.top = e.clientY + 14 + "px"; }
+function hideTip() { tip.style.opacity = 0; }
+
+function heatCell(e) {
+  const cv = $("heatmap"), rect = cv.getBoundingClientRect();
+  const j = Math.floor((e.clientX - rect.left) / cv._cell), i = Math.floor((e.clientY - rect.top) / cv._cell);
+  return result && i >= 0 && j >= 0 && i < result.n && j < result.n ? [i, j] : null;
+}
+$("heatmap").onmousemove = (e) => { const c = heatCell(e); if (!c) return hideTip(); showTip(e, `#${c[0]} ↔ #${c[1]} · ${result.sim[c[0]][c[1]].toFixed(3)}`); };
+$("heatmap").onmouseleave = hideTip;
+$("heatmap").onclick = (e) => { const c = heatCell(e); if (c) { hideTip(); openCompare(c[0], c[1]); } };
+
+function nearestPoint(e) {
+  const cv = $("scatter"), rect = cv.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  let best = null, bd = 12;
+  (cv._pts || []).forEach((p) => { const d = Math.hypot(p.x - x, p.y - y); if (d < bd) { bd = d; best = p; } });
+  return best;
+}
+$("scatter").onmousemove = (e) => {
+  const p = nearestPoint(e);
+  $("scatter").style.cursor = p ? "pointer" : "default";
+  if (!p) return hideTip();
+  showTip(e, `<img src="${images[p.i].url}"><span>#${p.i}</span>`);
+};
+$("scatter").onmouseleave = hideTip;
+$("scatter").onclick = (e) => { const p = nearestPoint(e); if (p) { hideTip(); openImage(p.i); } };
+
+let resizeTimer;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { if (result) { renderHeatmap(); renderScatter(); renderHist(); } }, 150);
+});
+
+// start with a generated set so the page is never empty
+runGenerator(true);
+</script>
+</body>
+</html>
